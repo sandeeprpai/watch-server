@@ -1,31 +1,39 @@
 const WebSocket = require('ws');
-const wss = new WebSocket.Server({ port: process.env.PORT || 8080 });
 
-const rooms = new Map();
+const PORT = process.env.PORT || 10000;
+const wss = new WebSocket.Server({ port: PORT });
+
+console.log(`WebSocket server running on port ${PORT}`);
 
 wss.on('connection', (ws) => {
-    let currentRoom = null;
+    ws.room = null;
 
-    wss.on('message', (message) => {
+    ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
+
+            // Handle joining a room
             if (data.type === 'JOIN') {
-                currentRoom = data.room;
-                if (!rooms.has(currentRoom)) rooms.set(currentRoom, new Set());
-                rooms.get(currentRoom).add(ws);
-            } else if (currentRoom && rooms.has(currentRoom)) {
-                for (let client of rooms.get(currentRoom)) {
-                    if (client !== ws && client.readyState === WebSocket.OPEN) {
-                        client.send(message);
-                    }
-                }
+                ws.room = data.room;
+                console.log(`Client joined room: ${ws.room}`);
+                return;
             }
-        } catch (e) { console.error(e); }
+
+            // Broadcast PLAY, PAUSE, SEEK to everyone else in the SAME room
+            if (ws.room) {
+                wss.clients.forEach((client) => {
+                    if (client !== ws && client.readyState === WebSocket.OPEN && client.room === ws.room) {
+                        client.send(message);
+                        console.log(`Relayed ${data.type} in room ${ws.room}`);
+                    }
+                });
+            }
+        } catch (e) {
+            console.error('Error parsing message:', e);
+        }
     });
 
     ws.on('close', () => {
-        if (currentRoom && rooms.has(currentRoom)) {
-            rooms.get(currentRoom).delete(ws);
-        }
+        console.log('Client disconnected');
     });
 });
