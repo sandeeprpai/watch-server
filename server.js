@@ -1,12 +1,12 @@
 const WebSocket = require('ws');
 
-const PORT = process.env.PORT || 10000;
-const wss = new WebSocket.Server({ port: PORT });
+const wss = new WebSocket.Server({ port: process.env.PORT || 8080 });
 
-console.log(`WebSocket server running on port ${PORT}`);
+// Track rooms: roomName -> Set of WebSocket clients
+const rooms = new Map();
 
 wss.on('connection', (ws) => {
-    ws.room = null;
+    let currentRoom = null;
 
     ws.on('message', (message) => {
         try {
@@ -14,26 +14,47 @@ wss.on('connection', (ws) => {
 
             // Handle joining a room
             if (data.type === 'JOIN') {
-                ws.room = data.room;
-                console.log(`Client joined room: ${ws.room}`);
+                currentRoom = data.room;
+                if (!rooms.has(currentRoom)) {
+                    rooms.set(currentRoom, new Set());
+                }
+                rooms.get(currentRoom).add(ws);
+                console.log(`Client joined room: ${currentRoom}`);
                 return;
             }
 
-            // Broadcast PLAY, PAUSE, SEEK to everyone else in the SAME room
-            if (ws.room) {
-                wss.clients.forEach((client) => {
-                    if (client !== ws && client.readyState === WebSocket.OPEN && client.room === ws.room) {
-                        client.send(message);
-                        console.log(`Relayed ${data.type} in room ${ws.room}`);
+            // Relay PLAY, PAUSE, SEEK commands to everyone else in the same room
+            if (currentRoom && rooms.has(currentRoom)) {
+                console.log(`Relayed ${data.type} in room ${currentRoom}`);
+                for (const client of rooms.get(currentRoom)) {
+                    // Send to other clients in the room (skip the sender to avoid loops)
+                    if (client !== ws && client.readyState === WebSocket.OPEN) {
+                        client.send(message.toString());
                     }
-                });
+                }
             }
         } catch (e) {
-            console.error('Error parsing message:', e);
+            console.error('Invalid JSON received:', e);
         }
     });
 
     ws.on('close', () => {
-        console.log('Client disconnected');
+        if (currentRoom && rooms.has(currentRoom)) {
+            rooms.get(currentRoom).delete(ws);
+            if (rooms.get(currentRoom).size === 0) {
+                rooms.delete(currentRoom);
+            }
+        }
     });
 });
+
+// Render heartbeat to prevent spin-down
+setInterval(() => {
+    wss.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.ping();
+        }
+    }, 30000);
+});
+
+console.log('WebSocket Watch Together Server Running...');
